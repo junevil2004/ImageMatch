@@ -10,6 +10,7 @@ function App() {
     const [selectedSearchFile, setSelectedSearchFile] = useState(null);
     const [loading, setLoading] = useState(false);
     const [searchImagePreview, setSearchImagePreview] = useState(null);
+    const [textQuery, setTextQuery] = useState('');
 
     const fetchGallery = async () => {
         try {
@@ -70,6 +71,10 @@ function App() {
         if (!selectedSearchFile) return;
         const formData = new FormData();
         formData.append("file", selectedSearchFile);
+        if (textQuery.trim()) {
+            formData.append("text_query", textQuery);
+        }
+
         setLoading(true);
         setSearchResults([]);
         try {
@@ -126,6 +131,15 @@ function App() {
                             <h3 className="card-title">2. 유사한 이미지 찾기</h3>
                             <div className="mb-3">
                                 <input className="form-control" type="file" onChange={handleSearchFileChange} />
+                            </div>
+                            <div className="mb-3">
+                                <input 
+                                    className="form-control"
+                                    type="text" 
+                                    placeholder="부가 설명 (예: 세면대)" 
+                                    value={textQuery}
+                                    onChange={(e) => setTextQuery(e.target.value)}
+                                />
                             </div>
                             <button className="btn btn-success" onClick={handleSearch} disabled={!selectedSearchFile || loading}>
                                 검색

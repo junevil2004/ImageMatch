@@ -4,7 +4,7 @@ import json
 import torch
 import open_clip
 from PIL import Image
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, File, UploadFile, HTTPException, Form
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from sklearn.metrics.pairwise import cosine_similarity
@@ -83,7 +83,11 @@ async def upload_image(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
 
 @app.post("/search/")
-async def search_similar_images(file: UploadFile = File(...), top_k: int = 5):
+async def search_similar_images(
+    file: UploadFile = File(...), 
+    text_query: str = Form(None), 
+    top_k: int = 5
+):
     try:
         # Save the query image temporarily
         query_image_path = os.path.join(IMAGE_STORAGE_PATH, f"query_{file.filename}")
@@ -91,8 +95,28 @@ async def search_similar_images(file: UploadFile = File(...), top_k: int = 5):
             buffer.write(await file.read())
 
         # Generate the vector for the query image
-        query_vector = generate_vector(query_image_path)
-        os.remove(query_image_path) # Clean up the temporary query image
+        image_vector = np.array(generate_vector(query_image_path))
+        query_vector = image_vector
+
+        # If text query is provided, combine vectors
+        if text_query and text_query.strip():
+            print(f"Received text query: {text_query}")
+            text = tokenizer([text_query])
+            with torch.no_grad(), torch.cuda.amp.autocast():
+                text_features = model.encode_text(text)
+                text_features /= text_features.norm(dim=-1, keepdim=True)
+            
+            text_vector = text_features.cpu().numpy()[0]
+            
+            # Combine vectors and re-normalize
+            combined_vector = image_vector + text_vector
+            norm = np.linalg.norm(combined_vector)
+            if norm > 0:
+                query_vector = (combined_vector / norm).tolist()
+            else:
+                query_vector = combined_vector.tolist()
+
+        os.remove(query_image_path)  # Clean up
 
         # Load stored vectors
         stored_vectors = load_vectors()
