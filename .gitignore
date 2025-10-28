@@ -1,0 +1,19 @@
+# Python
+venv/
+.venv/
+__pycache__/
+*.pyc
+
+# Node.js
+node_modules/
+dist/
+build/
+.npm/
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Storage - Do not commit user-uploaded data
+/storage/images/*
+/storage/vectors.json
