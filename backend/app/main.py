@@ -1,4 +1,3 @@
-
 import os
 import json
 import torch
@@ -9,6 +8,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
+from typing import List
+from pydantic import BaseModel
 import uuid
 
 # --- Configuration ---
@@ -16,6 +17,7 @@ app = FastAPI()
 STORAGE_PATH = "D:/_project/ImageMatch/storage"
 IMAGE_STORAGE_PATH = os.path.join(STORAGE_PATH, "images")
 VECTOR_STORAGE_PATH = os.path.join(STORAGE_PATH, "vectors.json")
+FEEDBACK_FILE_PATH = os.path.join(STORAGE_PATH, "feedback.jsonl")
 os.makedirs(IMAGE_STORAGE_PATH, exist_ok=True)
 
 # --- CORS Middleware ---
@@ -136,7 +138,7 @@ async def search_similar_images(
             for i in top_k_indices
         ]
 
-        return {"results": results}
+        return {"results": results, "query_vector": query_vector}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
 
@@ -145,5 +147,25 @@ def get_gallery():
     try:
         vectors = load_vectors()
         return {"images": list(vectors.keys())}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
+
+# --- Feedback Handling ---
+class FeedbackItem(BaseModel):
+    query_vector: List[float]
+    result_filename: str
+    judgment: str
+
+@app.post("/feedback/")
+async def receive_feedback(item: FeedbackItem):
+    try:
+        feedback_data = {
+            "query_vector": item.query_vector,
+            "result_filename": item.result_filename,
+            "judgment": item.judgment
+        }
+        with open(FEEDBACK_FILE_PATH, "a") as f:
+            f.write(json.dumps(feedback_data) + "\n")
+        return {"status": "success", "message": "Feedback received"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")

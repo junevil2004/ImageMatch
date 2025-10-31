@@ -11,6 +11,8 @@ function App() {
     const [loading, setLoading] = useState(false);
     const [searchImagePreview, setSearchImagePreview] = useState(null);
     const [textQuery, setTextQuery] = useState('');
+    const [lastQueryVector, setLastQueryVector] = useState(null);
+    const [feedbackStatus, setFeedbackStatus] = useState({}); // To track feedback for each image
 
     const fetchGallery = async () => {
         try {
@@ -77,6 +79,9 @@ function App() {
 
         setLoading(true);
         setSearchResults([]);
+        setLastQueryVector(null);
+        setFeedbackStatus({});
+
         try {
             const response = await axios.post(`${API_URL}/search/`, formData, {
                 headers: {
@@ -84,11 +89,34 @@ function App() {
                 }
             });
             setSearchResults(response.data.results || []);
+            setLastQueryVector(response.data.query_vector || null);
         } catch (error) {
             console.error("Error searching for image:", error);
             alert('이미지 검색 중 오류가 발생했습니다.');
         } finally {
             setLoading(false);
+        }
+    };
+
+    const handleFeedback = async (resultFilename, judgment) => {
+        if (!lastQueryVector) {
+            alert("피드백을 전송할 검색 정보가 없습니다.");
+            return;
+        }
+
+        setFeedbackStatus({ ...feedbackStatus, [resultFilename]: '전송중...' });
+
+        try {
+            await axios.post(`${API_URL}/feedback/`, {
+                query_vector: lastQueryVector,
+                result_filename: resultFilename,
+                judgment: judgment
+            });
+            setFeedbackStatus({ ...feedbackStatus, [resultFilename]: '완료!' });
+        } catch (error) {
+            console.error("Error submitting feedback:", error);
+            setFeedbackStatus({ ...feedbackStatus, [resultFilename]: '오류' });
+            alert("피드백 전송 중 오류가 발생했습니다.");
         }
     };
 
@@ -168,6 +196,24 @@ function App() {
                                             <img src={getImageUrl(result.filename)} className="card-img-top" alt={result.filename} style={{height: '300px', objectFit: 'cover'}}/>
                                             <div className="card-body">
                                                 <p className="card-text">유사도: {result.similarity.toFixed(4)}</p>
+                                            </div>
+                                            <div className="card-footer">
+                                                <small className="me-2">이 결과가 정확한가요?</small>
+                                                <button 
+                                                    className="btn btn-sm btn-success me-2"
+                                                    onClick={() => handleFeedback(result.filename, 'Correct')}
+                                                    disabled={feedbackStatus[result.filename]}
+                                                >
+                                                    정답
+                                                </button>
+                                                <button 
+                                                    className="btn btn-sm btn-danger"
+                                                    onClick={() => handleFeedback(result.filename, 'Incorrect')}
+                                                    disabled={feedbackStatus[result.filename]}
+                                                >
+                                                    오답
+                                                </button>
+                                                {feedbackStatus[result.filename] && <small className="ms-1 text-muted">({feedbackStatus[result.filename]})</small>}
                                             </div>
                                         </div>
                                     </div>
