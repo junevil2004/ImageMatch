@@ -51,20 +51,21 @@ else:
 
 print("Model loaded successfully.")
 
-# --- Helper Functions ---
+# --- Helper Functions (Refactored for new data structure) ---
 def load_vectors():
+    """Loads a list of vector objects from the JSON file."""
     if os.path.exists(VECTOR_STORAGE_PATH) and os.path.getsize(VECTOR_STORAGE_PATH) > 0:
         try:
-            with open(VECTOR_STORAGE_PATH, 'r') as f:
+            with open(VECTOR_STORAGE_PATH, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except json.JSONDecodeError:
-            # File is corrupted or malformed, treat as empty
-            return {}
-    return {}
+            return [] # Return empty list if file is corrupted
+    return [] # Return empty list if file doesn't exist or is empty
 
-def save_vectors(vectors):
-    with open(VECTOR_STORAGE_PATH, 'w') as f:
-        json.dump(vectors, f, indent=4)
+def save_vectors(vector_list):
+    """Saves a list of vector objects to the JSON file."""
+    with open(VECTOR_STORAGE_PATH, 'w', encoding='utf-8') as f:
+        json.dump(vector_list, f, indent=4)
 
 def generate_vector(image_path):
     image = Image.open(image_path).convert("RGB")
@@ -74,37 +75,35 @@ def generate_vector(image_path):
         image_features /= image_features.norm(dim=-1, keepdim=True)
     return image_features.cpu().numpy().tolist()[0]
 
-# --- API Endpoints ---
+# --- API Endpoints (Refactored) ---
 @app.get("/")
 def read_root():
     return {"message": "ImageMatch API is running"}
 
 @app.post("/uploads/")
 async def upload_images(files: List[UploadFile] = File(...)):
-    uploaded_files = []
+    vector_data = load_vectors()
+    newly_uploaded_files = []
     try:
-        # Load vectors once at the beginning
-        vectors = load_vectors()
-
         for file in files:
-            # Save the uploaded image
             file_extension = os.path.splitext(file.filename)[1]
-            image_id = str(uuid.uuid4())
-            image_filename = f"{image_id}{file_extension}"
-            image_path = os.path.join(IMAGE_STORAGE_PATH, image_filename)
+            image_id = f"{str(uuid.uuid4())}{file_extension}"
+            image_path = os.path.join(IMAGE_STORAGE_PATH, image_id)
 
             with open(image_path, "wb") as buffer:
                 buffer.write(await file.read())
 
-            # Generate vector and update dictionary in memory
             vector = generate_vector(image_path)
-            vectors[image_filename] = vector
-            uploaded_files.append(image_filename)
+            
+            vector_data.append({
+                "id": image_id,
+                "original_filename": file.filename,
+                "vector": vector
+            })
+            newly_uploaded_files.append(file.filename)
 
-        # Save vectors once at the end
-        save_vectors(vectors)
-
-        return {"filenames": uploaded_files}
+        save_vectors(vector_data)
+        return {"filenames": newly_uploaded_files, "message": f"{len(newly_uploaded_files)} files uploaded successfully."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
 
@@ -114,53 +113,47 @@ async def search_similar_images(
     text_query: str = Form(None), 
     top_k: int = 5
 ):
+    vector_data = load_vectors()
+    if not vector_data:
+        return {"results": [], "query_vector": []}
+
     try:
-        # Save the query image temporarily
         query_image_path = os.path.join(IMAGE_STORAGE_PATH, f"query_{file.filename}")
         with open(query_image_path, "wb") as buffer:
             buffer.write(await file.read())
 
-        # Generate the vector for the query image
         image_vector = np.array(generate_vector(query_image_path))
         query_vector = image_vector
 
-        # If text query is provided, combine vectors
         if text_query and text_query.strip():
             print(f"Received text query: {text_query}")
             text = tokenizer([text_query])
             with torch.no_grad(), torch.cuda.amp.autocast():
                 text_features = model.encode_text(text)
                 text_features /= text_features.norm(dim=-1, keepdim=True)
-            
             text_vector = text_features.cpu().numpy()[0]
-            
-            # Combine vectors and re-normalize
             combined_vector = image_vector + text_vector
             norm = np.linalg.norm(combined_vector)
             if norm > 0:
-                query_vector = (combined_vector / norm).tolist()
-            else:
-                query_vector = combined_vector.tolist()
+                query_vector = (combined_vector / norm)
+        
+        os.remove(query_image_path)
 
-        os.remove(query_image_path)  # Clean up
-
-        # Load stored vectors
-        stored_vectors = load_vectors()
-        if not stored_vectors:
-            return {"results": []}
-
-        filenames = list(stored_vectors.keys())
-        vectors = np.array(list(stored_vectors.values()))
-
-        # Calculate similarities
-        similarities = cosine_similarity([query_vector], vectors)[0]
-
-        # Get top_k results
+        # Prepare data for cosine similarity
+        gallery_vectors = np.array([item['vector'] for item in vector_data])
+        
+        similarities = cosine_similarity([query_vector], gallery_vectors)[0]
+        
         top_k_indices = np.argsort(similarities)[-top_k:][::-1]
-        results = [
-            {"filename": filenames[i], "similarity": float(similarities[i])}
-            for i in top_k_indices
-        ]
+
+        results = []
+        for i in top_k_indices:
+            item = vector_data[i]
+            results.append({
+                "id": item['id'],
+                "original_filename": item['original_filename'],
+                "similarity": float(similarities[i])
+            })
 
         return {"results": results, "query_vector": query_vector.tolist()}
     except Exception as e:
@@ -169,15 +162,17 @@ async def search_similar_images(
 @app.get("/gallery/")
 def get_gallery():
     try:
-        vectors = load_vectors()
-        return {"images": list(vectors.keys())}
+        vector_data = load_vectors()
+        # Return a simplified list for the gallery view
+        gallery_items = [{"id": item["id"], "original_filename": item["original_filename"]} for item in vector_data]
+        return {"images": gallery_items}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
 
 # --- Feedback Handling ---
 class FeedbackItem(BaseModel):
     query_vector: List[float]
-    result_filename: str
+    result_filename: str # This is the UUID filename (the 'id')
     judgment: str
 
 @app.post("/feedback/")
@@ -185,10 +180,10 @@ async def receive_feedback(item: FeedbackItem):
     try:
         feedback_data = {
             "query_vector": item.query_vector,
-            "result_filename": item.result_filename,
+            "result_id": item.result_filename, # Renaming for clarity
             "judgment": item.judgment
         }
-        with open(FEEDBACK_FILE_PATH, "a") as f:
+        with open(FEEDBACK_FILE_PATH, "a", encoding='utf-8') as f:
             f.write(json.dumps(feedback_data) + "\n")
         return {"status": "success", "message": "Feedback received"}
     except Exception as e:

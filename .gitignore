@@ -17,3 +17,6 @@ Thumbs.db
 # Storage - Do not commit user-uploaded data
 /storage/images/*
 /storage/vectors.json
+
+# User-specific uploads
+/업로드목록/

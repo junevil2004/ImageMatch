@@ -55,12 +55,12 @@ function App() {
 
         setLoading(true);
         try {
-            await axios.post(`${API_URL}/uploads/`, formData, {
+            const response = await axios.post(`${API_URL}/uploads/`, formData, {
                 headers: {
                     'Content-Type': 'multipart/form-data'
                 }
             });
-            alert(`${selectedUploadFiles.length}개의 이미지를 성공적으로 업로드했습니다!`);
+            alert(`${response.data.filenames.length}개의 이미지를 성공적으로 업로드했습니다!`);
             setSelectedUploadFiles([]);
             document.getElementById('upload-file-input').value = ''
             fetchGallery(); // Refresh gallery
@@ -101,30 +101,30 @@ function App() {
         }
     };
 
-    const handleFeedback = async (resultFilename, judgment) => {
+    const handleFeedback = async (resultId, judgment) => {
         if (!lastQueryVector) {
             alert("피드백을 전송할 검색 정보가 없습니다.");
             return;
         }
 
-        setFeedbackStatus({ ...feedbackStatus, [resultFilename]: '전송중...' });
+        setFeedbackStatus({ ...feedbackStatus, [resultId]: '전송중...' });
 
         try {
             await axios.post(`${API_URL}/feedback/`, {
                 query_vector: lastQueryVector,
-                result_filename: resultFilename,
+                result_filename: resultId, // Pass the UUID 'id' as result_filename
                 judgment: judgment
             });
-            setFeedbackStatus({ ...feedbackStatus, [resultFilename]: '완료!' });
+            setFeedbackStatus({ ...feedbackStatus, [resultId]: '완료!' });
         } catch (error) {
             console.error("Error submitting feedback:", error);
-            setFeedbackStatus({ ...feedbackStatus, [resultFilename]: '오류' });
+            setFeedbackStatus({ ...feedbackStatus, [resultId]: '오류' });
             alert("피드백 전송 중 오류가 발생했습니다.");
         }
     };
 
-    const getImageUrl = (filename) => {
-        return `${API_URL}/storage/images/${filename}`;
+    const getImageUrl = (id) => {
+        return `${API_URL}/storage/images/${id}`;
     }
 
     return (
@@ -193,30 +193,31 @@ function App() {
                         <div className="col-12 col-md-8">
                             <h4>검색 결과</h4>
                             <div className="row">
-                                {searchResults.map((result, index) => (
-                                    <div key={index} className="col-lg-4 col-md-6 col-sm-6 mb-4">
+                                {searchResults.map((result) => (
+                                    <div key={result.id} className="col-lg-4 col-md-6 col-sm-6 mb-4">
                                         <div className="card h-100">
-                                            <img src={getImageUrl(result.filename)} className="card-img-top" alt={result.filename} style={{height: '300px', objectFit: 'cover'}}/>
+                                            <img src={getImageUrl(result.id)} className="card-img-top" alt={result.original_filename} style={{height: '300px', objectFit: 'cover'}}/>
                                             <div className="card-body">
+                                                <p className="card-text text-truncate" title={result.original_filename}>{result.original_filename}</p>
                                                 <p className="card-text">유사도: {result.similarity.toFixed(4)}</p>
                                             </div>
                                             <div className="card-footer">
                                                 <small className="me-2">이 결과가 정확한가요?</small>
                                                 <button 
                                                     className="btn btn-sm btn-success me-2"
-                                                    onClick={() => handleFeedback(result.filename, 'Correct')}
-                                                    disabled={feedbackStatus[result.filename]}
+                                                    onClick={() => handleFeedback(result.id, 'Correct')}
+                                                    disabled={feedbackStatus[result.id]}
                                                 >
                                                     정답
                                                 </button>
                                                 <button 
                                                     className="btn btn-sm btn-danger"
-                                                    onClick={() => handleFeedback(result.filename, 'Incorrect')}
-                                                    disabled={feedbackStatus[result.filename]}
+                                                    onClick={() => handleFeedback(result.id, 'Incorrect')}
+                                                    disabled={feedbackStatus[result.id]}
                                                 >
                                                     오답
                                                 </button>
-                                                {feedbackStatus[result.filename] && <small className="ms-1 text-muted">({feedbackStatus[result.filename]})</small>}
+                                                {feedbackStatus[result.id] && <small className="ms-1 text-muted">({feedbackStatus[result.id]})</small>}
                                             </div>
                                         </div>
                                     </div>
@@ -233,10 +234,13 @@ function App() {
                 <hr />
                 {galleryImages.length > 0 ? (
                     <div className="row">
-                        {galleryImages.map((filename, index) => (
-                            <div key={index} className="col-lg-2 col-md-3 col-sm-4 mb-4">
+                        {galleryImages.map((image) => (
+                            <div key={image.id} className="col-lg-2 col-md-3 col-sm-4 mb-4">
                                 <div className="card h-100">
-                                    <img src={getImageUrl(filename)} className="card-img-top" alt={filename} style={{height: '300px', objectFit: 'cover'}}/>
+                                    <img src={getImageUrl(image.id)} className="card-img-top" alt={image.original_filename} style={{height: '150px', objectFit: 'cover'}}/>
+                                    <div className="card-footer">
+                                        <small className="text-muted text-truncate" title={image.original_filename}>{image.original_filename}</small>
+                                    </div>
                                 </div>
                             </div>
                         ))}
