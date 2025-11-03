@@ -2,100 +2,108 @@ import os
 import json
 import torch
 import open_clip
+from PIL import Image
 import numpy as np
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
+from collections import defaultdict
 
 # --- Configuration ---
 STORAGE_PATH = "D:/_project/ImageMatch/storage"
 FEEDBACK_FILE_PATH = os.path.join(STORAGE_PATH, "feedback.jsonl")
-VECTOR_STORAGE_PATH = os.path.join(STORAGE_PATH, "vectors.json")
+IMAGE_STORAGE_PATH = os.path.join(STORAGE_PATH, "images")
+QUERIES_STORAGE_PATH = os.path.join(STORAGE_PATH, "queries")
 FINETUNED_MODEL_PATH = os.path.join(STORAGE_PATH, "finetuned_model.pt")
 
 BASE_MODEL_NAME = 'ViT-L-14'
 PRETRAINED_DATASET = 'datacomp_xl_s13b_b90k'
 
 # --- Hyperparameters ---
-EPOCHS = 5
-LEARNING_RATE = 1e-6
-BATCH_SIZE = 4 # Small batch size due to potential memory constraints
+EPOCHS = 10 # More epochs for better learning
+LEARNING_RATE = 1e-7 # A smaller learning rate is crucial for fine-tuning
+BATCH_SIZE = 2 # Must be small due to memory usage of images
 MARGIN = 0.2 # Margin for TripletLoss
 
-# 1. Load Feedback and Vector Data
-def load_data():
+# 1. Load Feedback and construct training triplets
+def load_training_data():
     if not os.path.exists(FEEDBACK_FILE_PATH):
         print(f"Feedback file not found at {FEEDBACK_FILE_PATH}")
         return []
-    
-    # Load the list of vector objects and create a lookup map
-    print(f"Loading stored vectors from {VECTOR_STORAGE_PATH}")
-    with open(VECTOR_STORAGE_PATH, 'r', encoding='utf-8') as f:
-        vector_objects = json.load(f)
-    stored_vectors_map = {item['id']: item['vector'] for item in vector_objects}
 
     feedback_triplets = []
-    print(f"Loading feedback from {FEEDBACK_FILE_PATH}")
-    with open(FEEDBACK_FILE_PATH, 'r', encoding='utf-8') as f:
-        lines = f.readlines()
-        # Group feedback by query vector
-        queries = {}
-        for line in lines:
-            data = json.loads(line)
-            query_key = tuple(data['query_vector'])
-            if query_key not in queries:
-                queries[query_key] = {'Correct': [], 'Incorrect': []}
-            
-            # Use the new map for lookup
-            result_vector = stored_vectors_map.get(data['result_id'])
-            if result_vector:
-                queries[query_key][data['judgment']].append(result_vector)
+    queries = defaultdict(lambda: {'Correct': set(), 'Incorrect': set()})
 
-        # Create triplets
-        for query_vector, judgments in queries.items():
-            for positive in judgments['Correct']:
-                for negative in judgments['Incorrect']:
-                    feedback_triplets.append({
-                        'anchor': list(query_vector),
-                        'positive': positive,
-                        'negative': negative
-                    })
+    with open(FEEDBACK_FILE_PATH, 'r', encoding='utf-8') as f:
+        for line in f:
+            try:
+                data = json.loads(line)
+                query_key = (data['query_image_filename'], data.get('query_text'))
+                queries[query_key][data['judgment']].add(data['result_id'])
+            except (json.JSONDecodeError, KeyError):
+                print(f"Skipping malformed feedback line: {line.strip()}")
+                continue
+
+    # Create triplets of (anchor_query, positive_id, negative_id)
+    for query_info, judgments in queries.items():
+        for positive_id in judgments['Correct']:
+            for negative_id in judgments['Incorrect']:
+                feedback_triplets.append({
+                    "query_image_filename": query_info[0],
+                    "query_text": query_info[1],
+                    "positive_id": positive_id,
+                    "negative_id": negative_id
+                })
+    
     print(f"Generated {len(feedback_triplets)} training triplets from feedback.")
     return feedback_triplets
 
 # 2. Create PyTorch Dataset
-class FeedbackDataset(Dataset):
-    def __init__(self, data):
-        self.data = data
+class TripletDataset(Dataset):
+    def __init__(self, triplets, image_preprocess, text_tokenizer):
+        self.triplets = triplets
+        self.preprocess = image_preprocess
+        self.tokenizer = text_tokenizer
 
     def __len__(self):
-        return len(self.data)
+        return len(self.triplets)
 
     def __getitem__(self, idx):
-        item = self.data[idx]
-        anchor = torch.tensor(item['anchor'], dtype=torch.float32)
-        positive = torch.tensor(item['positive'], dtype=torch.float32)
-        negative = torch.tensor(item['negative'], dtype=torch.float32)
-        return anchor, positive, negative
+        triplet = self.triplets[idx]
+
+        # Load images
+        query_img_path = os.path.join(QUERIES_STORAGE_PATH, triplet["query_image_filename"])
+        pos_img_path = os.path.join(IMAGE_STORAGE_PATH, triplet["positive_id"])
+        neg_img_path = os.path.join(IMAGE_STORAGE_PATH, triplet["negative_id"])
+
+        query_image = self.preprocess(Image.open(query_img_path).convert("RGB"))
+        positive_image = self.preprocess(Image.open(pos_img_path).convert("RGB"))
+        negative_image = self.preprocess(Image.open(neg_img_path).convert("RGB"))
+
+        # Tokenize text
+        query_text = self.tokenizer([triplet["query_text"] if triplet["query_text"] else ""])[0]
+
+        return query_image, positive_image, negative_image, query_text
 
 # 3. Main Training Function
 def train():
-    print("Starting model fine-tuning process...")
+    print("Starting REAL model fine-tuning process...")
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
 
+    # Load model and preprocessors
+    print(f"Loading base model: {BASE_MODEL_NAME}")
+    model, _, preprocess = open_clip.create_model_and_transforms(BASE_MODEL_NAME, pretrained=PRETRAINED_DATASET)
+    tokenizer = open_clip.get_tokenizer(BASE_MODEL_NAME)
+    model.to(device)
+
     # Load data
-    triplets = load_data()
+    triplets = load_training_data()
     if not triplets:
         print("No training data available. Please provide more feedback.")
         return
 
-    dataset = FeedbackDataset(triplets)
+    dataset = TripletDataset(triplets, preprocess, tokenizer)
     dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True)
-
-    # Load model
-    print(f"Loading base model: {BASE_MODEL_NAME}")
-    model, _, _ = open_clip.create_model_and_transforms(BASE_MODEL_NAME, pretrained=PRETRAINED_DATASET)
-    model.to(device)
 
     # Setup loss and optimizer
     loss_fn = torch.nn.TripletMarginLoss(margin=MARGIN)
@@ -107,41 +115,42 @@ def train():
         total_loss = 0
         progress_bar = tqdm(dataloader, desc=f"Epoch {epoch+1}/{EPOCHS}")
         
-        for anchor, positive, negative in progress_bar:
-            anchor, positive, negative = anchor.to(device), positive.to(device), negative.to(device)
+        for query_img, pos_img, neg_img, query_txt in progress_bar:
+            query_img, pos_img, neg_img, query_txt = \
+                query_img.to(device), pos_img.to(device), neg_img.to(device), query_txt.to(device)
 
-            # The model itself doesn't process pre-computed vectors.
-            # This is a conceptual flaw. The model needs to be trained on the IMAGES, not the vectors.
-            # The correct way is to train model(image_anchor), model(image_positive), model(image_negative)
-            # The current feedback format is insufficient for this.
-            # A major refactor is needed to log image paths instead of vectors.
-            
-            # Let's pivot the training script to work with what we have, even if conceptually imperfect.
-            # We can't pass vectors to the model. We will treat the vectors AS IF they were model outputs.
-            # This means we can't fine-tune the full model, but we could train a small transformation layer.
-            # This is getting too complex. Let's simplify the script to just print a message
-            # explaining that the training logic needs to be implemented after data is collected.
-            # This is a safer and more honest approach than writing flawed code.
-            pass # Placeholder for correct training logic
+            # Get embeddings from the model
+            with torch.cuda.amp.autocast(enabled=(device=='cuda')):
+                query_img_vec = model.encode_image(query_img)
+                pos_vec = model.encode_image(pos_img)
+                neg_vec = model.encode_image(neg_img)
 
-    # This is a placeholder for the real training logic which is complex.
-    # For now, we will just save a dummy file to show the process is complete.
-    print("\n--- Placeholder Training Complete ---")
-    print("This is a simulation. Real model training requires a more complex setup.")
-    print("Saving a dummy 'finetuned_model.pt' to demonstrate the workflow.")
-    dummy_state = model.state_dict()
-    torch.save(dummy_state, FINETUNED_MODEL_PATH)
-    print(f"\nFine-tuned model saved to {FINETUNED_MODEL_PATH}")
-    print("You can now restart the main server to use the (simulated) fine-tuned model.")
+                # Combine query image and text vectors if text exists
+                # Note: This is a simplified approach. A more advanced approach might use cross-attention.
+                query_txt_vec = model.encode_text(query_txt)
+                anchor_vec = query_img_vec + query_txt_vec
+                anchor_vec = anchor_vec / anchor_vec.norm(dim=-1, keepdim=True)
 
+                # Calculate loss
+                loss = loss_fn(anchor_vec, pos_vec, neg_vec)
+
+            # Backpropagation
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            total_loss += loss.item()
+            progress_bar.set_postfix({"loss": f"{loss.item():.4f}"})
+
+        avg_loss = total_loss / len(dataloader)
+        print(f"Epoch {epoch+1} finished. Average Loss: {avg_loss:.4f}")
+
+    # Save the fine-tuned model
+    print("\nTraining complete.")
+    print(f"Saving fine-tuned model to {FINETUNED_MODEL_PATH}")
+    torch.save(model.state_dict(), FINETUNED_MODEL_PATH)
+    print("\nFine-tuned model saved successfully.")
+    print("You can now restart the main server to use the fine-tuned model.")
 
 if __name__ == "__main__":
-    # This is a placeholder script. The logic for creating triplets and training is non-trivial
-    # and requires careful implementation. The code above has a conceptual flaw where it tries
-    # to use pre-computed vectors as input to a model that expects images.
-    # A real implementation would need to load images based on filenames stored in the feedback log.
-    print("=================================================================")
-    print("WARNING: This is a placeholder training script.")
-    print("It demonstrates the workflow but does not perform real training.")
-    print("=================================================================")
     train()
