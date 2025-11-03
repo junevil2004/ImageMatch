@@ -53,9 +53,13 @@ print("Model loaded successfully.")
 
 # --- Helper Functions ---
 def load_vectors():
-    if os.path.exists(VECTOR_STORAGE_PATH):
-        with open(VECTOR_STORAGE_PATH, 'r') as f:
-            return json.load(f)
+    if os.path.exists(VECTOR_STORAGE_PATH) and os.path.getsize(VECTOR_STORAGE_PATH) > 0:
+        try:
+            with open(VECTOR_STORAGE_PATH, 'r') as f:
+                return json.load(f)
+        except json.JSONDecodeError:
+            # File is corrupted or malformed, treat as empty
+            return {}
     return {}
 
 def save_vectors(vectors):
@@ -79,6 +83,9 @@ def read_root():
 async def upload_images(files: List[UploadFile] = File(...)):
     uploaded_files = []
     try:
+        # Load vectors once at the beginning
+        vectors = load_vectors()
+
         for file in files:
             # Save the uploaded image
             file_extension = os.path.splitext(file.filename)[1]
@@ -89,12 +96,13 @@ async def upload_images(files: List[UploadFile] = File(...)):
             with open(image_path, "wb") as buffer:
                 buffer.write(await file.read())
 
-            # Generate and save the vector
+            # Generate vector and update dictionary in memory
             vector = generate_vector(image_path)
-            vectors = load_vectors()
             vectors[image_filename] = vector
-            save_vectors(vectors)
             uploaded_files.append(image_filename)
+
+        # Save vectors once at the end
+        save_vectors(vectors)
 
         return {"filenames": uploaded_files}
     except Exception as e:
