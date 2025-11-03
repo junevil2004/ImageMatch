@@ -36,6 +36,19 @@ app.mount("/storage", StaticFiles(directory=STORAGE_PATH), name="storage")
 print("Loading OpenCLIP model (ViT-L-14)...")
 model, _, preprocess = open_clip.create_model_and_transforms('ViT-L-14', pretrained='datacomp_xl_s13b_b90k')
 tokenizer = open_clip.get_tokenizer('ViT-L-14')
+
+# Check for and load fine-tuned model if it exists
+FINETUNED_MODEL_PATH = os.path.join(STORAGE_PATH, "finetuned_model.pt")
+if os.path.exists(FINETUNED_MODEL_PATH):
+    print(f"Found fine-tuned model at {FINETUNED_MODEL_PATH}. Loading weights.")
+    try:
+        model.load_state_dict(torch.load(FINETUNED_MODEL_PATH))
+        print("Successfully loaded fine-tuned model weights.")
+    except Exception as e:
+        print(f"Error loading fine-tuned model weights: {e}. Using base model.")
+else:
+    print("No fine-tuned model found. Using base pre-trained model.")
+
 print("Model loaded successfully.")
 
 # --- Helper Functions ---
