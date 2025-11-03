@@ -27,11 +27,15 @@ def load_data():
         print(f"Feedback file not found at {FEEDBACK_FILE_PATH}")
         return []
     
-    with open(VECTOR_STORAGE_PATH, 'r') as f:
-        stored_vectors = json.load(f)
+    # Load the list of vector objects and create a lookup map
+    print(f"Loading stored vectors from {VECTOR_STORAGE_PATH}")
+    with open(VECTOR_STORAGE_PATH, 'r', encoding='utf-8') as f:
+        vector_objects = json.load(f)
+    stored_vectors_map = {item['id']: item['vector'] for item in vector_objects}
 
     feedback_triplets = []
-    with open(FEEDBACK_FILE_PATH, 'r') as f:
+    print(f"Loading feedback from {FEEDBACK_FILE_PATH}")
+    with open(FEEDBACK_FILE_PATH, 'r', encoding='utf-8') as f:
         lines = f.readlines()
         # Group feedback by query vector
         queries = {}
@@ -41,7 +45,8 @@ def load_data():
             if query_key not in queries:
                 queries[query_key] = {'Correct': [], 'Incorrect': []}
             
-            result_vector = stored_vectors.get(data['result_filename'])
+            # Use the new map for lookup
+            result_vector = stored_vectors_map.get(data['result_id'])
             if result_vector:
                 queries[query_key][data['judgment']].append(result_vector)
 
