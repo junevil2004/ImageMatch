@@ -75,25 +75,28 @@ def generate_vector(image_path):
 def read_root():
     return {"message": "ImageMatch API is running"}
 
-@app.post("/upload/")
-async def upload_image(file: UploadFile = File(...)):
+@app.post("/uploads/")
+async def upload_images(files: List[UploadFile] = File(...)):
+    uploaded_files = []
     try:
-        # Save the uploaded image
-        file_extension = os.path.splitext(file.filename)[1]
-        image_id = str(uuid.uuid4())
-        image_filename = f"{image_id}{file_extension}"
-        image_path = os.path.join(IMAGE_STORAGE_PATH, image_filename)
+        for file in files:
+            # Save the uploaded image
+            file_extension = os.path.splitext(file.filename)[1]
+            image_id = str(uuid.uuid4())
+            image_filename = f"{image_id}{file_extension}"
+            image_path = os.path.join(IMAGE_STORAGE_PATH, image_filename)
 
-        with open(image_path, "wb") as buffer:
-            buffer.write(await file.read())
+            with open(image_path, "wb") as buffer:
+                buffer.write(await file.read())
 
-        # Generate and save the vector
-        vector = generate_vector(image_path)
-        vectors = load_vectors()
-        vectors[image_filename] = vector
-        save_vectors(vectors)
+            # Generate and save the vector
+            vector = generate_vector(image_path)
+            vectors = load_vectors()
+            vectors[image_filename] = vector
+            save_vectors(vectors)
+            uploaded_files.append(image_filename)
 
-        return {"filename": image_filename, "vector": vector}
+        return {"filenames": uploaded_files}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
 

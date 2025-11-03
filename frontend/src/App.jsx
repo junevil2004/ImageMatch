@@ -6,7 +6,7 @@ const API_URL = 'http://127.0.0.1:8000';
 function App() {
     const [galleryImages, setGalleryImages] = useState([]);
     const [searchResults, setSearchResults] = useState([]);
-    const [selectedUploadFile, setSelectedUploadFile] = useState(null);
+    const [selectedUploadFiles, setSelectedUploadFiles] = useState([]);
     const [selectedSearchFile, setSelectedSearchFile] = useState(null);
     const [loading, setLoading] = useState(false);
     const [searchImagePreview, setSearchImagePreview] = useState(null);
@@ -28,7 +28,7 @@ function App() {
     }, []);
 
     const handleUploadFileChange = (e) => {
-        setSelectedUploadFile(e.target.files[0]);
+        setSelectedUploadFiles([...e.target.files]);
     };
 
     const handleSearchFileChange = (e) => {
@@ -47,22 +47,25 @@ function App() {
     };
 
     const handleUpload = async () => {
-        if (!selectedUploadFile) return;
+        if (selectedUploadFiles.length === 0) return;
         const formData = new FormData();
-        formData.append("file", selectedUploadFile);
+        for (const file of selectedUploadFiles) {
+            formData.append("files", file);
+        }
+
         setLoading(true);
         try {
-            await axios.post(`${API_URL}/upload/`, formData, {
+            await axios.post(`${API_URL}/uploads/`, formData, {
                 headers: {
                     'Content-Type': 'multipart/form-data'
                 }
             });
-            alert('이미지를 성공적으로 업로드했습니다!');
-            setSelectedUploadFile(null);
+            alert(`${selectedUploadFiles.length}개의 이미지를 성공적으로 업로드했습니다!`);
+            setSelectedUploadFiles([]);
             document.getElementById('upload-file-input').value = ''
             fetchGallery(); // Refresh gallery
         } catch (error) {
-            console.error("Error uploading image:", error);
+            console.error("Error uploading images:", error);
             alert('이미지 업로드 중 오류가 발생했습니다.');
         } finally {
             setLoading(false);
@@ -143,10 +146,10 @@ function App() {
                         <div className="card-body">
                             <h3 className="card-title">1. 갤러리에 이미지 추가</h3>
                             <div className="mb-3">
-                                <input id="upload-file-input" className="form-control" type="file" onChange={handleUploadFileChange} />
+                                <input id="upload-file-input" className="form-control" type="file" onChange={handleUploadFileChange} multiple />
                             </div>
-                            <button className="btn btn-primary" onClick={handleUpload} disabled={!selectedUploadFile || loading}>
-                                이미지 업로드
+                            <button className="btn btn-primary" onClick={handleUpload} disabled={selectedUploadFiles.length === 0 || loading}>
+                                {selectedUploadFiles.length > 0 ? `${selectedUploadFiles.length}개 이미지 업로드` : '이미지 업로드'}
                             </button>
                         </div>
                     </div>
