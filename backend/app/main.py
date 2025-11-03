@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
-from typing import List
+from typing import List, Optional
 from pydantic import BaseModel
 import uuid
 
@@ -16,9 +16,11 @@ import uuid
 app = FastAPI()
 STORAGE_PATH = "D:/_project/ImageMatch/storage"
 IMAGE_STORAGE_PATH = os.path.join(STORAGE_PATH, "images")
+QUERIES_STORAGE_PATH = os.path.join(STORAGE_PATH, "queries") # For storing query images
 VECTOR_STORAGE_PATH = os.path.join(STORAGE_PATH, "vectors.json")
 FEEDBACK_FILE_PATH = os.path.join(STORAGE_PATH, "feedback.jsonl")
 os.makedirs(IMAGE_STORAGE_PATH, exist_ok=True)
+os.makedirs(QUERIES_STORAGE_PATH, exist_ok=True) # Create queries directory
 
 # --- CORS Middleware ---
 app.add_middleware(
@@ -51,19 +53,17 @@ else:
 
 print("Model loaded successfully.")
 
-# --- Helper Functions (Refactored for new data structure) ---
+# --- Helper Functions ---
 def load_vectors():
-    """Loads a list of vector objects from the JSON file."""
     if os.path.exists(VECTOR_STORAGE_PATH) and os.path.getsize(VECTOR_STORAGE_PATH) > 0:
         try:
             with open(VECTOR_STORAGE_PATH, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except json.JSONDecodeError:
-            return [] # Return empty list if file is corrupted
-    return [] # Return empty list if file doesn't exist or is empty
+            return []
+    return []
 
 def save_vectors(vector_list):
-    """Saves a list of vector objects to the JSON file."""
     with open(VECTOR_STORAGE_PATH, 'w', encoding='utf-8') as f:
         json.dump(vector_list, f, indent=4)
 
@@ -75,7 +75,7 @@ def generate_vector(image_path):
         image_features /= image_features.norm(dim=-1, keepdim=True)
     return image_features.cpu().numpy().tolist()[0]
 
-# --- API Endpoints (Refactored) ---
+# --- API Endpoints (Refactored for correct feedback logging) ---
 @app.get("/")
 def read_root():
     return {"message": "ImageMatch API is running"}
@@ -115,10 +115,13 @@ async def search_similar_images(
 ):
     vector_data = load_vectors()
     if not vector_data:
-        return {"results": [], "query_vector": []}
+        return {"results": [], "query_image_filename": None}
 
     try:
-        query_image_path = os.path.join(IMAGE_STORAGE_PATH, f"query_{file.filename}")
+        # Save the query image persistently with a unique ID
+        file_extension = os.path.splitext(file.filename)[1]
+        query_image_id = f"query_{str(uuid.uuid4())}{file_extension}"
+        query_image_path = os.path.join(QUERIES_STORAGE_PATH, query_image_id)
         with open(query_image_path, "wb") as buffer:
             buffer.write(await file.read())
 
@@ -137,13 +140,8 @@ async def search_similar_images(
             if norm > 0:
                 query_vector = (combined_vector / norm)
         
-        os.remove(query_image_path)
-
-        # Prepare data for cosine similarity
         gallery_vectors = np.array([item['vector'] for item in vector_data])
-        
         similarities = cosine_similarity([query_vector], gallery_vectors)[0]
-        
         top_k_indices = np.argsort(similarities)[-top_k:][::-1]
 
         results = []
@@ -155,7 +153,7 @@ async def search_similar_images(
                 "similarity": float(similarities[i])
             })
 
-        return {"results": results, "query_vector": query_vector.tolist()}
+        return {"results": results, "query_image_filename": query_image_id}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
 
@@ -163,24 +161,26 @@ async def search_similar_images(
 def get_gallery():
     try:
         vector_data = load_vectors()
-        # Return a simplified list for the gallery view
         gallery_items = [{"id": item["id"], "original_filename": item["original_filename"]} for item in vector_data]
         return {"images": gallery_items}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
 
-# --- Feedback Handling ---
+# --- Feedback Handling (Final Version) ---
 class FeedbackItem(BaseModel):
-    query_vector: List[float]
-    result_filename: str # This is the UUID filename (the 'id')
+    query_image_filename: str
+    query_text: Optional[str] = None
+    result_id: str
     judgment: str
 
 @app.post("/feedback/")
 async def receive_feedback(item: FeedbackItem):
     try:
+        # Log the raw information needed for training
         feedback_data = {
-            "query_vector": item.query_vector,
-            "result_id": item.result_filename, # Renaming for clarity
+            "query_image_filename": item.query_image_filename,
+            "query_text": item.query_text,
+            "result_id": item.result_id,
             "judgment": item.judgment
         }
         with open(FEEDBACK_FILE_PATH, "a", encoding='utf-8') as f:

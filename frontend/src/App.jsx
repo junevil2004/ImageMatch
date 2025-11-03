@@ -11,7 +11,7 @@ function App() {
     const [loading, setLoading] = useState(false);
     const [searchImagePreview, setSearchImagePreview] = useState(null);
     const [textQuery, setTextQuery] = useState('');
-    const [lastQueryVector, setLastQueryVector] = useState(null);
+    const [lastQueryImageFilename, setLastQueryImageFilename] = useState(null);
     const [feedbackStatus, setFeedbackStatus] = useState({}); // To track feedback for each image
 
     const fetchGallery = async () => {
@@ -82,7 +82,7 @@ function App() {
 
         setLoading(true);
         setSearchResults([]);
-        setLastQueryVector(null);
+        setLastQueryImageFilename(null);
         setFeedbackStatus({});
 
         try {
@@ -92,7 +92,7 @@ function App() {
                 }
             });
             setSearchResults(response.data.results || []);
-            setLastQueryVector(response.data.query_vector || null);
+            setLastQueryImageFilename(response.data.query_image_filename || null);
         } catch (error) {
             console.error("Error searching for image:", error);
             alert('이미지 검색 중 오류가 발생했습니다.');
@@ -102,7 +102,7 @@ function App() {
     };
 
     const handleFeedback = async (resultId, judgment) => {
-        if (!lastQueryVector) {
+        if (!lastQueryImageFilename) {
             alert("피드백을 전송할 검색 정보가 없습니다.");
             return;
         }
@@ -111,8 +111,9 @@ function App() {
 
         try {
             await axios.post(`${API_URL}/feedback/`, {
-                query_vector: lastQueryVector,
-                result_filename: resultId, // Pass the UUID 'id' as result_filename
+                query_image_filename: lastQueryImageFilename,
+                query_text: textQuery,
+                result_id: resultId,
                 judgment: judgment
             });
             setFeedbackStatus({ ...feedbackStatus, [resultId]: '완료!' });
