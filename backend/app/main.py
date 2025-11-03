@@ -162,7 +162,7 @@ async def search_similar_images(
             for i in top_k_indices
         ]
 
-        return {"results": results, "query_vector": query_vector}
+        return {"results": results, "query_vector": query_vector.tolist()}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
 
